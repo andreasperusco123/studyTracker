@@ -1,3 +1,8 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Study Tracker</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -28,8 +33,10 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html { padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
 body {
-  background: var(--bg); color: var(--ink);
+  margin: 0; background: var(--bg); color: var(--ink);
   font-family: var(--font-body); font-size: 15px; line-height: 1.5;
   padding: 0 20px;
 }
@@ -43,6 +50,10 @@ header { display: flex; justify-content: space-between; align-items: baseline; g
 header p { margin: 0; color: var(--muted); }
 
 .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 24px; }
+
+.head-right { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.sync { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--muted); }
+.sync.error #syncText { color: var(--danger); }
 
 /* Timer */
 .timer { display: grid; grid-template-columns: 1fr auto; gap: 24px; align-items: center; }
@@ -143,11 +154,18 @@ button.small { padding: 6px 12px; font-size: 13px; font-weight: 500; }
 }
 @media (prefers-reduced-motion: reduce) { .running .dot { animation: none; } }
 </style>
-
+</head>
+<body>
 <main>
   <header>
     <h1>Study Tracker</h1>
-    <p id="dateline"></p>
+    <div class="head-right">
+      <p id="dateline"></p>
+      <div class="sync" id="sync">
+        <span id="syncText">Connecting…</span>
+        <button class="small" type="button" id="syncBtn" hidden>Sign in with Google to sync</button>
+      </div>
+    </div>
   </header>
 
   <section class="panel timer" id="timerPanel" aria-label="Study timer">
@@ -235,7 +253,128 @@ state.heat = Object.assign({}, DEFAULTS, state.heat);
 const RANGES = { 5: { name: "month", cell: 28 }, 13: { name: "3 months", cell: 22 }, 26: { name: "6 months", cell: 16 }, 53: { name: "year", cell: 12 } };
 if (!RANGES[state.weeks]) state.weeks = 53;
 state.sample = state.sessions.some(s => s.sample);
-function save() { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch {} }
+function saveLocal() { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch {} }
+function save() { saveLocal(); queueMeta(); }
+
+// ---- cloud sync (Firebase) ----
+// Signed out, everything lives in localStorage. Signed in, sessions and settings live in
+// Firestore under users/{uid} and localStorage is just this device's cached copy.
+const firebaseConfig = {
+  apiKey: "AIzaSyAlk4jrABsaJTha8-CNePhP5edRbZ0mQCA",
+  authDomain: "studytrackerap-1fb3f.firebaseapp.com",
+  projectId: "studytrackerap-1fb3f",
+  storageBucket: "studytrackerap-1fb3f.firebasestorage.app",
+  messagingSenderId: "380957239271",
+  appId: "1:380957239271:web:aec824500fb16dcc593f42"
+};
+const FB = "https://www.gstatic.com/firebasejs/10.14.1/";
+const sync = { user: null, unsubs: [], metaTimer: 0 };
+
+async function initSync() {
+  try {
+    const [app, auth, fs] = await Promise.all(
+      ["firebase-app.js", "firebase-auth.js", "firebase-firestore.js"].map(f => import(FB + f)));
+    const fbApp = app.initializeApp(firebaseConfig);
+    sync.auth = auth; sync.fs = fs;
+    sync.authInst = auth.getAuth(fbApp);
+    sync.db = fs.initializeFirestore(fbApp, {
+      localCache: fs.persistentLocalCache({ tabManager: fs.persistentMultipleTabManager() })
+    });
+    auth.onAuthStateChanged(sync.authInst, onUser);
+  } catch (e) {
+    console.warn("Sync unavailable", e);
+    renderSync("Sync unavailable · saved on this device");
+  }
+}
+
+function renderSync(message, isError) {
+  const btn = $("syncBtn");
+  $("sync").classList.toggle("error", !!isError);
+  if (message) { $("syncText").textContent = message; if (!sync.auth) { btn.hidden = true; return; } }
+  else $("syncText").textContent = sync.user ? `Synced as ${sync.user.displayName || sync.user.email}` : "Saved on this device";
+  btn.hidden = false;
+  btn.textContent = sync.user ? "Sign out" : "Sign in with Google to sync";
+}
+
+$("syncBtn").onclick = async () => {
+  const { GoogleAuthProvider, signInWithPopup, signInWithRedirect, signOut } = sync.auth;
+  if (sync.user) {
+    // Keep this device clean after signing out: drop the synced copy, keep anything never uploaded.
+    await signOut(sync.authInst);
+    state.sessions = state.sessions.filter(s => !s.synced);
+    saveLocal(); renderAll();
+    return;
+  }
+  const provider = new GoogleAuthProvider();
+  try { await signInWithPopup(sync.authInst, provider); }
+  catch (e) {
+    if (e.code === "auth/popup-blocked") return signInWithRedirect(sync.authInst, provider);
+    if (e.code !== "auth/popup-closed-by-user" && e.code !== "auth/cancelled-popup-request")
+      renderSync(`Sign-in failed (${e.code || e.message})`, true);
+  }
+};
+
+const userPath = () => `users/${sync.user.uid}`;
+function syncError(e) { console.error(e); renderSync(`Sync error: ${e.code || e.message}`, true); }
+
+function pushSession(s) {
+  if (!sync.user || s.sample) return;
+  const { doc, setDoc } = sync.fs;
+  setDoc(doc(sync.db, userPath(), "sessions", String(s.id)),
+    { id: s.id, start: s.start, ms: s.ms, subject: s.subject || "" }).catch(syncError);
+}
+function removeSession(s) {
+  if (!sync.user || !s.synced) return;
+  const { doc, deleteDoc } = sync.fs;
+  deleteDoc(doc(sync.db, userPath(), "sessions", String(s.id))).catch(syncError);
+}
+// Timer state and graph settings share one document; writes are debounced so dragging a colour picker doesn't flood it.
+function writeMeta() {
+  if (!sync.user) return;
+  const { doc, setDoc } = sync.fs;
+  setDoc(doc(sync.db, userPath(), "meta", "state"),
+    { running: state.running || null, heat: state.heat, weeks: state.weeks, updated: Date.now() }).catch(syncError);
+}
+function queueMeta() {
+  if (!sync.user) return;
+  clearTimeout(sync.metaTimer);
+  sync.metaTimer = setTimeout(writeMeta, 400);
+}
+
+function onUser(user) {
+  sync.unsubs.forEach(u => u()); sync.unsubs = [];
+  sync.user = user;
+  renderSync();
+  if (!user) return;
+  const { collection, doc, onSnapshot } = sync.fs;
+
+  // Upload anything logged on this device while signed out.
+  state.sessions.filter(s => !s.sample && !s.synced).forEach(pushSession);
+
+  sync.unsubs.push(onSnapshot(collection(sync.db, userPath(), "sessions"), snap => {
+    const remote = snap.docs.map(d => ({ ...d.data(), synced: true }));
+    const ids = new Set(remote.map(r => r.id));
+    const localOnly = state.sessions.filter(s => s.sample || (!s.synced && !ids.has(s.id)));
+    state.sessions = [...remote, ...localOnly];
+    state.sample = state.sessions.some(s => s.sample);
+    saveLocal(); renderAll();
+  }, syncError));
+
+  let first = true;
+  sync.unsubs.push(onSnapshot(doc(sync.db, userPath(), "meta", "state"), snap => {
+    const wasFirst = first; first = false;
+    if (!snap.exists()) { writeMeta(); return; }
+    if (snap.metadata.hasPendingWrites) return;   // our own write echoing back
+    const m = snap.data();
+    // A timer already running here on first sign-in wins over an idle one in the cloud.
+    const keepLocalTimer = wasFirst && state.running && !m.running;
+    if (!keepLocalTimer) state.running = m.running || null;
+    if (m.heat) state.heat = Object.assign({}, DEFAULTS, m.heat);
+    if (RANGES[m.weeks]) state.weeks = m.weeks;
+    saveLocal(); renderAll();
+    if (keepLocalTimer) writeMeta();
+  }, syncError));
+}
 
 // ---- date helpers (local time) ----
 const dayKey = d => { d = new Date(d); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; };
@@ -269,7 +408,8 @@ $("stopBtn").onclick = () => {
   const ms = elapsed();
   if (ms >= 60000) {
     if (state.sample) clearSample();
-    state.sessions.push({ id: Date.now(), start: state.running.firstStart, ms, subject: $("subject").value.trim() || state.running.subject });
+    const s = { id: Date.now(), start: state.running.firstStart, ms, subject: $("subject").value.trim() || state.running.subject };
+    state.sessions.push(s); pushSession(s);
   }
   state.running = null; save(); renderAll();
 };
@@ -409,7 +549,7 @@ function renderSessions() {
     li.querySelector(".what").textContent = s.subject || "Study session";
     li.querySelector(".when").textContent = when;
     li.querySelector(".dur").textContent = fmtDur(s.ms);
-    li.querySelector("button").onclick = () => { state.sessions = state.sessions.filter(x => x.id !== s.id); save(); renderAll(); };
+    li.querySelector("button").onclick = () => { state.sessions = state.sessions.filter(x => x.id !== s.id); removeSession(s); save(); renderAll(); };
     list.appendChild(li);
   }
 }
@@ -424,7 +564,8 @@ $("manualForm").addEventListener("submit", e => {
   if (!y || !mins) return;
   if (state.sample) clearSample();
   const start = new Date(y, m - 1, d, 12).getTime();
-  state.sessions.push({ id: Date.now(), start, ms: mins * 60000, subject: $("subject").value.trim() || "Added manually" });
+  const s = { id: Date.now(), start, ms: mins * 60000, subject: $("subject").value.trim() || "Added manually" };
+  state.sessions.push(s); pushSession(s);
   $("mMin").value = ""; save(); renderAll();
 });
 
@@ -440,11 +581,11 @@ function loadSample() {
     const mins = Math.round(15 + Math.random() ** 1.6 * 220);
     out.push({ id: +d + i, start: +d + 16 * 3600000, ms: mins * 60000, subject: subjects[i % subjects.length], sample: true });
   }
-  state.sessions = out; state.sample = true; save(); renderAll();
+  state.sessions = out; state.sample = true; saveLocal(); renderAll();
 }
 function clearSample() { state.sessions = state.sessions.filter(s => !s.sample); state.sample = false; }
 $("loadSample").onclick = loadSample;
-$("clearSample").onclick = () => { clearSample(); save(); renderAll(); };
+$("clearSample").onclick = () => { clearSample(); saveLocal(); renderAll(); };
 
 function renderAll() {
   const totals = totalsByDay();
@@ -454,4 +595,7 @@ function renderAll() {
   applyHeatColours(); renderTimer(); renderHeatmap(totals); renderStreak(totals); renderSessions();
 }
 renderAll();
+initSync();
 </script>
+</body>
+</html>
