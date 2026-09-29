@@ -1,0 +1,457 @@
+<title>Study Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: one centered column — timer panel on top, year heatmap below, recent sessions last. */
+:root {
+  /* Single dark theme, matched to the Claude Code app: warm charcoal greys, ivory text, clay accent. */
+  color-scheme: dark;
+  --bg: #1f1e1d;
+  --surface: #262624;
+  --ink: #f5f4ef;
+  --muted: #a3a09a;
+  --line: #3a3936;
+  --accent: #d97757;
+  --accent-ink: #1f1e1d;
+  --danger: #e5776f;
+  --h0: #30302e;
+  --h1: #5a3a2e;
+  --h2: #82503c;
+  --h3: #ad6449;
+  --h4: #d97757;
+  --font-display: "Bricolage Grotesque", "Helvetica Neue", Arial, sans-serif;
+  --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --cell: 12px;
+  --gap: 3px;
+}
+
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--ink);
+  font-family: var(--font-body); font-size: 15px; line-height: 1.5;
+  padding: 0 20px;
+}
+main { max-width: 900px; margin: 0 auto; padding-block: 40px 64px; display: grid; gap: 28px; }
+main > * { min-width: 0; }
+h1, h2 { font-family: var(--font-display); margin: 0; text-wrap: balance; }
+h1 { font-size: 30px; font-weight: 700; letter-spacing: -0.01em; }
+h2 { font-size: 18px; font-weight: 500; }
+.label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); font-weight: 600; }
+header { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+header p { margin: 0; color: var(--muted); }
+
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 24px; }
+
+/* Timer */
+.timer { display: grid; grid-template-columns: 1fr auto; gap: 24px; align-items: center; }
+.clock {
+  font-family: var(--font-mono); font-weight: 600; font-size: clamp(44px, 10vw, 72px);
+  line-height: 1; font-variant-numeric: tabular-nums; letter-spacing: -0.02em;
+}
+.clock.idle { color: var(--muted); }
+.status { display: inline-flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.running .dot { background: var(--accent); animation: pulse 1.6s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: 0.3; } }
+.subject { margin-top: 16px; display: grid; gap: 6px; max-width: 360px; }
+input[type="text"], input[type="number"] {
+  font: inherit; color: var(--ink); background: var(--bg);
+  border: 1px solid var(--line); border-radius: 8px; padding: 9px 12px; width: 100%;
+}
+input:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.controls { display: flex; flex-direction: column; gap: 10px; min-width: 150px; }
+button {
+  font: inherit; font-weight: 600; cursor: pointer; border-radius: 10px;
+  padding: 11px 18px; border: 1px solid var(--line); background: var(--surface); color: var(--ink);
+}
+button:hover { border-color: var(--muted); }
+button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-size: 16px; padding: 14px 22px; }
+button.primary:hover { filter: brightness(1.08); }
+button[disabled] { opacity: 0.4; cursor: default; }
+button.link { background: none; border: none; padding: 0; color: var(--accent); font-weight: 500; }
+
+/* Stats */
+
+/* Heatmap */
+.heat-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+.heat-meta { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.range { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; padding: 2px; gap: 2px; }
+.range button { padding: 4px 10px; font-size: 12px; font-weight: 500; border: none; border-radius: 6px; background: none; color: var(--muted); }
+.range button:hover { color: var(--ink); }
+.range button[aria-pressed="true"] { background: var(--h0); color: var(--ink); }
+.heat-scroll { overflow-x: auto; padding-bottom: 12px; }
+.heat { display: grid; grid-template-columns: auto 1fr; gap: 6px; width: max-content; }
+.days { display: grid; grid-template-rows: 14px repeat(7, var(--cell)); row-gap: var(--gap); font-size: 10px; color: var(--muted); }
+.days span { line-height: var(--cell); }
+.months { position: relative; height: 14px; font-size: 10px; color: var(--muted); }
+.months span { position: absolute; top: 0; }
+.grid {
+  display: grid; grid-template-rows: repeat(7, var(--cell)); grid-auto-flow: column;
+  grid-auto-columns: var(--cell); gap: var(--gap);
+}
+.cell { width: var(--cell); height: var(--cell); border-radius: 3px; background: var(--h0); }
+.cell.l1 { background: var(--h1); } .cell.l2 { background: var(--h2); }
+.cell.l3 { background: var(--h3); } .cell.l4 { background: var(--h4); }
+.cell.today { outline: 1.5px solid var(--ink); outline-offset: 1px; }
+.cell.future { background: transparent; }
+.legend { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--muted); justify-content: flex-end; margin-top: 10px; }
+.legend .cell { display: inline-block; width: 12px; height: 12px; }
+.tip {
+  position: fixed; pointer-events: none; background: var(--ink); color: var(--bg); box-shadow: 0 4px 14px rgb(0 0 0 / 0.4);
+  font-size: 12px; padding: 6px 9px; border-radius: 6px; white-space: nowrap; z-index: 10;
+  transform: translate(-50%, calc(-100% - 8px));
+}
+
+/* Heatmap settings */
+.heat-foot { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 10px; }
+.heat-foot .legend { margin-top: 0; }
+.settings { display: flex; gap: 20px; align-items: end; flex-wrap: wrap; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--line); }
+.settings label { display: grid; gap: 6px; }
+.settings input[type="color"] {
+  width: 56px; height: 36px; padding: 3px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--bg); cursor: pointer;
+}
+.settings input[type="number"] { width: 90px; }
+.settings .hint { font-size: 12px; color: var(--muted); flex-basis: 100%; margin: 0; }
+button.small { padding: 6px 12px; font-size: 13px; font-weight: 500; }
+
+/* Sessions */
+.sessions { list-style: none; margin: 12px 0 0; padding: 0; display: grid; }
+.sessions li {
+  display: grid; grid-template-columns: 1fr auto auto; gap: 16px; align-items: center;
+  padding: 10px 0; border-top: 1px solid var(--line);
+}
+.sessions .when { color: var(--muted); font-size: 13px; }
+.sessions .dur { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.sessions button { padding: 4px 10px; font-size: 12px; font-weight: 500; color: var(--muted); }
+.sessions button:hover { color: var(--danger); border-color: var(--danger); }
+.empty { color: var(--muted); margin: 12px 0 0; }
+.manual { display: flex; gap: 8px; align-items: end; flex-wrap: wrap; margin-top: 16px; }
+.manual label { display: grid; gap: 4px; }
+.manual input[type="number"] { width: 110px; }
+.manual input[type="date"] { font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+.sample-note { background: var(--h0); border-radius: 8px; padding: 8px 12px; font-size: 13px; display: flex; gap: 12px; justify-content: space-between; flex-wrap: wrap; }
+
+@media (max-width: 640px) {
+  .timer { grid-template-columns: 1fr; }
+  .controls { flex-direction: row; flex-wrap: wrap; }
+  .controls button { flex: 1; }
+  .sessions li { grid-template-columns: 1fr auto; }
+  .sessions li button { grid-column: 2; }
+}
+@media (prefers-reduced-motion: reduce) { .running .dot { animation: none; } }
+</style>
+
+<main>
+  <header>
+    <h1>Study Tracker</h1>
+    <p id="dateline"></p>
+  </header>
+
+  <section class="panel timer" id="timerPanel" aria-label="Study timer">
+    <div>
+      <div class="status label"><span class="dot"></span><span id="statusText">Ready</span></div>
+      <div class="clock idle" id="clock" role="timer" aria-live="off">0:00:00</div>
+      <div class="subject">
+        <label class="label" for="subject">What are you studying?</label>
+        <input type="text" id="subject" placeholder="e.g. Organic chemistry, ch. 4" maxlength="80">
+      </div>
+    </div>
+    <div class="controls">
+      <button class="primary" id="startBtn">Start</button>
+      <button id="stopBtn" disabled>Finish &amp; log</button>
+      <button id="discardBtn" disabled>Discard</button>
+    </div>
+  </section>
+
+  <section class="panel" aria-label="Daily activity">
+    <div class="heat-head">
+      <h2 id="heatTitle">Study time in the last year</h2>
+      <div class="heat-meta">
+        <div class="range" role="group" aria-label="Time range">
+          <button type="button" data-weeks="5">1 month</button>
+          <button type="button" data-weeks="13">3 months</button>
+          <button type="button" data-weeks="26">6 months</button>
+          <button type="button" data-weeks="53">1 year</button>
+        </div>
+        <span class="label" id="streak"></span>
+      </div>
+    </div>
+    <div id="sampleNote" class="sample-note" hidden>
+      <span>Showing sample data so you can see how the graph fills in.</span>
+      <button class="link" id="clearSample">Clear sample data</button>
+    </div>
+    <div class="heat-scroll" id="heatScroll">
+      <div class="heat">
+        <div class="days"><span></span><span></span><span>Mon</span><span></span><span>Wed</span><span></span><span>Fri</span><span></span></div>
+        <div>
+          <div class="months" id="months"></div>
+          <div class="grid" id="grid"></div>
+        </div>
+      </div>
+    </div>
+    <div class="heat-foot">
+      <button class="small" id="customBtn" aria-expanded="false" aria-controls="settings">Customise colours</button>
+      <div class="legend" id="legend">Less
+        <span class="cell"></span><span class="cell l1"></span><span class="cell l2"></span><span class="cell l3"></span><span class="cell l4"></span>
+      More</div>
+    </div>
+    <div class="settings" id="settings" hidden>
+      <label><span class="label">Start colour</span><input type="color" id="cStart"></label>
+      <label><span class="label">End colour</span><input type="color" id="cEnd"></label>
+      <label><span class="label">Max colour at (minutes)</span><input type="number" id="cMax" min="4" max="1440" step="5"></label>
+      <button class="small" type="button" id="cReset">Reset</button>
+      <p class="hint" id="cHint"></p>
+    </div>
+  </section>
+
+  <section aria-label="Recent sessions">
+    <h2>Recent sessions</h2>
+    <p class="empty" id="emptyMsg">No sessions yet. Press Start when you sit down to study, or
+      <button class="link" id="loadSample">load sample data</button> to preview the graph.</p>
+    <ul class="sessions" id="sessions"></ul>
+    <form class="manual" id="manualForm">
+      <label><span class="label">Add time manually</span><input type="date" id="mDate" required></label>
+      <label><span class="label">Minutes</span><input type="number" id="mMin" min="1" max="1440" required></label>
+      <button type="submit">Add</button>
+    </form>
+  </section>
+</main>
+<div class="tip" id="tip" hidden></div>
+
+<script>
+const KEY = "studytracker.v1";
+const $ = id => document.getElementById(id);
+
+function load() {
+  try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch { return {}; }
+}
+const DEFAULTS = { start: "#4a3328", end: "#d97757", maxMin: 120 };
+let state = Object.assign({ sessions: [], running: null, sample: false }, load());
+state.heat = Object.assign({}, DEFAULTS, state.heat);
+// Weeks shown on the graph, and the cell size that suits each range.
+const RANGES = { 5: { name: "month", cell: 28 }, 13: { name: "3 months", cell: 22 }, 26: { name: "6 months", cell: 16 }, 53: { name: "year", cell: 12 } };
+if (!RANGES[state.weeks]) state.weeks = 53;
+state.sample = state.sessions.some(s => s.sample);
+function save() { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch {} }
+
+// ---- date helpers (local time) ----
+const dayKey = d => { d = new Date(d); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; };
+const startOfDay = d => { d = new Date(d); d.setHours(0,0,0,0); return d; };
+const addDays = (d, n) => { d = new Date(d); d.setDate(d.getDate() + n); return d; };
+const fmtDur = ms => {
+  const m = Math.round(ms / 60000);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60), r = m % 60;
+  return r ? `${h}h ${r}m` : `${h}h`;
+};
+const fmtClock = ms => {
+  const s = Math.floor(ms / 1000);
+  return `${Math.floor(s/3600)}:${String(Math.floor(s/60)%60).padStart(2,"0")}:${String(s%60).padStart(2,"0")}`;
+};
+
+// ---- timer ----
+// running = { segStart: ms|null (null = paused), accumulated: ms, firstStart: ms, subject }
+function elapsed() {
+  const r = state.running; if (!r) return 0;
+  return r.accumulated + (r.segStart ? Date.now() - r.segStart : 0);
+}
+$("startBtn").onclick = () => {
+  const r = state.running;
+  if (!r) state.running = { segStart: Date.now(), accumulated: 0, firstStart: Date.now(), subject: $("subject").value.trim() };
+  else if (r.segStart) { r.accumulated += Date.now() - r.segStart; r.segStart = null; }
+  else r.segStart = Date.now();
+  save(); renderTimer();
+};
+$("stopBtn").onclick = () => {
+  const ms = elapsed();
+  if (ms >= 60000) {
+    if (state.sample) clearSample();
+    state.sessions.push({ id: Date.now(), start: state.running.firstStart, ms, subject: $("subject").value.trim() || state.running.subject });
+  }
+  state.running = null; save(); renderAll();
+};
+$("discardBtn").onclick = () => {
+  const btn = $("discardBtn");
+  if (btn.dataset.confirm) { state.running = null; save(); delete btn.dataset.confirm; renderTimer(); return; }
+  btn.dataset.confirm = "1"; btn.textContent = "Tap again to discard";
+  setTimeout(() => { delete btn.dataset.confirm; renderTimer(); }, 3000);
+};
+$("subject").addEventListener("input", () => { if (state.running) { state.running.subject = $("subject").value.trim(); save(); } });
+
+function renderTimer() {
+  const r = state.running, ms = elapsed();
+  $("clock").textContent = fmtClock(ms);
+  $("clock").classList.toggle("idle", !r);
+  $("timerPanel").classList.toggle("running", !!(r && r.segStart));
+  $("statusText").textContent = !r ? "Ready" : r.segStart ? "Studying" : "Paused";
+  $("startBtn").textContent = !r ? "Start" : r.segStart ? "Pause" : "Resume";
+  $("stopBtn").disabled = !r;
+  $("stopBtn").title = r && ms < 60000 ? "Sessions under a minute are not logged" : "";
+  $("discardBtn").disabled = !r;
+  if (!$("discardBtn").dataset.confirm) $("discardBtn").textContent = "Discard";
+  document.title = r && r.segStart ? `${fmtClock(ms)} · Study Tracker` : "Study Tracker";
+}
+setInterval(() => { if (state.running) renderTimer(); }, 1000);
+
+// ---- aggregation ----
+function totalsByDay() {
+  const t = {};
+  for (const s of state.sessions) t[dayKey(s.start)] = (t[dayKey(s.start)] || 0) + s.ms;
+  return t;
+}
+// Four shades: quarters of the threshold, and the end colour from the threshold upward.
+const level = ms => {
+  const m = ms / 60000, t = state.heat.maxMin;
+  return m <= 0 ? 0 : m < t / 4 ? 1 : m < t / 2 ? 2 : m < t ? 3 : 4;
+};
+
+// ---- heatmap colours ----
+const hexToRgb = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
+const rgbToHex = c => "#" + c.map(v => Math.round(v).toString(16).padStart(2, "0")).join("");
+const mix = (a, b, t) => rgbToHex(hexToRgb(a).map((v, i) => v + (hexToRgb(b)[i] - v) * t));
+function applyHeatColours() {
+  const { start, end, maxMin } = state.heat, root = document.documentElement.style;
+  [0, 1 / 3, 2 / 3, 1].forEach((t, i) => root.setProperty(`--h${i + 1}`, mix(start, end, t)));
+  // The page accent (buttons, links, status dot, focus rings) is halfway between start and end.
+  const accent = mix(start, end, 0.5);
+  root.setProperty("--accent", accent);
+  const [r, g, bl] = hexToRgb(accent), lum = (0.299 * r + 0.587 * g + 0.114 * bl) / 255;
+  root.setProperty("--accent-ink", lum > 0.55 ? "#1f1e1d" : "#f5f4ef");
+  $("cStart").value = start; $("cEnd").value = end; $("cMax").value = maxMin;
+  const q = maxMin / 4, f = m => fmtDur(m * 60000);
+  $("cHint").textContent = `Shades step up at ${f(q)}, ${f(q * 2)} and ${f(q * 3)}. Days with ${f(maxMin)} or more get the end colour.`;
+  $("legend").title = `Less than ${f(q)} → ${f(maxMin)}+`;
+}
+$("customBtn").onclick = () => {
+  const open = $("settings").hidden;
+  $("settings").hidden = !open;
+  $("customBtn").setAttribute("aria-expanded", open);
+  $("customBtn").textContent = open ? "Done" : "Customise colours";
+};
+$("cStart").addEventListener("input", e => { state.heat.start = e.target.value; save(); applyHeatColours(); });
+$("cEnd").addEventListener("input", e => { state.heat.end = e.target.value; save(); applyHeatColours(); });
+$("cMax").addEventListener("change", e => {
+  const v = Math.round(Number(e.target.value));
+  state.heat.maxMin = v >= 4 && v <= 1440 ? v : DEFAULTS.maxMin;
+  save(); applyHeatColours(); renderHeatmap(totalsByDay());
+});
+$("cReset").onclick = () => { state.heat = { ...DEFAULTS }; save(); applyHeatColours(); renderHeatmap(totalsByDay()); };
+document.querySelectorAll(".range button").forEach(b => b.onclick = () => {
+  state.weeks = Number(b.dataset.weeks); save(); renderHeatmap(totalsByDay());
+});
+
+// ---- heatmap ----
+function renderHeatmap(totals) {
+  const today = startOfDay(new Date());
+  const end = addDays(today, 6 - today.getDay());           // Saturday of this week
+  const weeks = state.weeks, cell = RANGES[weeks].cell;
+  const start = addDays(end, -7 * weeks + 1);               // Sunday, `weeks` weeks back
+  document.documentElement.style.setProperty("--cell", cell + "px");
+  $("heatTitle").textContent = `Study time in the last ${RANGES[weeks].name}`;
+  document.querySelectorAll(".range button").forEach(b => b.setAttribute("aria-pressed", b.dataset.weeks == weeks));
+  const grid = $("grid"), months = $("months");
+  grid.innerHTML = ""; months.innerHTML = "";
+  const cellPx = cell + 3;
+  let lastMonth = -1, col = 0;
+  for (let d = new Date(start); d <= end; d = addDays(d, 1)) {
+    const el = document.createElement("div");
+    el.className = "cell";
+    if (d > today) el.classList.add("future");
+    else {
+      const ms = totals[dayKey(d)] || 0;
+      if (ms) el.classList.add("l" + level(ms));
+      if (+d === +today) el.classList.add("today");
+      el.dataset.tip = `${ms ? fmtDur(ms) : "No study"} on ${d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", year: "numeric" })}`;
+    }
+    if (d.getDay() === 0) {
+      if (d.getMonth() !== lastMonth && d.getDate() <= 7 && col < weeks - 1) {
+        const m = document.createElement("span");
+        m.textContent = d.toLocaleDateString(undefined, { month: "short" });
+        m.style.left = col * cellPx + "px";
+        months.appendChild(m);
+        lastMonth = d.getMonth();
+      }
+      col++;
+    }
+    grid.appendChild(el);
+  }
+  const sc = $("heatScroll"); sc.scrollLeft = sc.scrollWidth;
+}
+const tip = $("tip");
+$("grid").addEventListener("pointerover", e => {
+  const t = e.target.dataset && e.target.dataset.tip; if (!t) return;
+  const r = e.target.getBoundingClientRect();
+  tip.textContent = t; tip.style.left = r.left + r.width / 2 + "px"; tip.style.top = r.top + "px"; tip.hidden = false;
+});
+$("grid").addEventListener("pointerout", () => { tip.hidden = true; });
+window.addEventListener("scroll", () => { tip.hidden = true; }, { passive: true });
+
+// ---- streak ----
+function renderStreak(totals) {
+  const today = startOfDay(new Date());
+  let streak = 0, d = totals[dayKey(today)] ? today : addDays(today, -1);
+  while (totals[dayKey(d)]) { streak++; d = addDays(d, -1); }
+  $("streak").textContent = `Current streak: ${streak} day${streak === 1 ? "" : "s"}`;
+}
+
+// ---- sessions list ----
+function renderSessions() {
+  const list = $("sessions"); list.innerHTML = "";
+  const recent = [...state.sessions].sort((a, b) => b.start - a.start).slice(0, 12);
+  $("emptyMsg").hidden = state.sessions.length > 0;
+  for (const s of recent) {
+    const li = document.createElement("li");
+    const when = new Date(s.start).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+    li.innerHTML = `<div><div class="what"></div><div class="when"></div></div><span class="dur"></span><button type="button">Delete</button>`;
+    li.querySelector(".what").textContent = s.subject || "Study session";
+    li.querySelector(".when").textContent = when;
+    li.querySelector(".dur").textContent = fmtDur(s.ms);
+    li.querySelector("button").onclick = () => { state.sessions = state.sessions.filter(x => x.id !== s.id); save(); renderAll(); };
+    list.appendChild(li);
+  }
+}
+
+// ---- manual entry ----
+$("mDate").value = dayKey(new Date());
+$("mDate").max = dayKey(new Date());
+$("manualForm").addEventListener("submit", e => {
+  e.preventDefault();
+  const [y, m, d] = $("mDate").value.split("-").map(Number);
+  const mins = Number($("mMin").value);
+  if (!y || !mins) return;
+  if (state.sample) clearSample();
+  const start = new Date(y, m - 1, d, 12).getTime();
+  state.sessions.push({ id: Date.now(), start, ms: mins * 60000, subject: $("subject").value.trim() || "Added manually" });
+  $("mMin").value = ""; save(); renderAll();
+});
+
+// ---- sample data ----
+function loadSample() {
+  const subjects = ["Linear algebra", "Spanish vocab", "History essay", "Physics problem set", "Reading"];
+  const today = startOfDay(new Date());
+  const out = [];
+  for (let i = 0; i < 300; i++) {
+    const d = addDays(today, -i);
+    const busy = d.getDay() === 0 || d.getDay() === 6 ? 0.45 : 0.72;
+    if (Math.random() > busy) continue;
+    const mins = Math.round(15 + Math.random() ** 1.6 * 220);
+    out.push({ id: +d + i, start: +d + 16 * 3600000, ms: mins * 60000, subject: subjects[i % subjects.length], sample: true });
+  }
+  state.sessions = out; state.sample = true; save(); renderAll();
+}
+function clearSample() { state.sessions = state.sessions.filter(s => !s.sample); state.sample = false; }
+$("loadSample").onclick = loadSample;
+$("clearSample").onclick = () => { clearSample(); save(); renderAll(); };
+
+function renderAll() {
+  const totals = totalsByDay();
+  $("dateline").textContent = new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
+  $("sampleNote").hidden = !state.sample;
+  if (state.running) $("subject").value = state.running.subject || "";
+  applyHeatColours(); renderTimer(); renderHeatmap(totals); renderStreak(totals); renderSessions();
+}
+renderAll();
+</script>
